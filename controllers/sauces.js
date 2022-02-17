@@ -1,6 +1,5 @@
 const mongoose = require("mongoose")
 const { unlink } = require("fs/promises")
-const res = require("express/lib/response")
 
 const productSchema = new mongoose.Schema({
   userId: String,
@@ -28,65 +27,65 @@ function getSauce(req, res) {
   return Product.findById(id)
 }
 
- function getSauceById(req, res) {
+function getSauceById(req, res) {
   getSauce(req, res)
-  .then(product => sendClientResponse(product, res))
-  .catch((err) => res.status(500).send(err))
+    .then((product) => sendClientResponse(product, res))
+    .catch((err) => res.status(500).send(err))
 }
 
 function deleteSauce(req, res) {
-    const { id } = req.params
-    Product.findByIdAndDelete(id)
+  const { id } = req.params
+  Product.findByIdAndDelete(id)
     .then((product) => sendClientResponse(product, res))
     .then((item) => deleteImage(item))
-    .then((res)=> console.log("FILE DELETED", res))
-    .catch((err) => res.status(500).send({message: err}))
+    .then((res) => console.log("FILE DELETED", res))
+    .catch((err) => res.status(500).send({ message: err }))
+}
+
+function modifySauce(req, res) {
+  const {
+    params: { id }
+  } = req
+
+  const hasNewImage = req.file != null
+  const payload = makePayload(hasNewImage, req)
+
+  Product.findByIdAndUpdate(id, payload)
+    .then((dbResponse) => sendClientResponse(dbResponse, res))
+    .then((product) => deleteImage(product))
+    .then((res) => console.log("FILE DELETED", res))
+    .catch((err) => console.error("PROBLEM UPDATING", err))
 }
 
 function deleteImage(product) {
-    const { imageUrl } = product
-    const imageToDelete = imageUrl.split("/").at(-1)
-    return unlink("images/" + imageToDelete)
-    
+  if (product == null) return
+  console.log("DELETE IMAGE", product)
+  const imageToDelete = product.imageUrl.split("/").at(-1)
+  return unlink("images/" + imageToDelete)
+}
+
+function makePayload(hasNewImage, req) {
+  console.log("hasNewImage:", hasNewImage)
+  if (!hasNewImage) return req.body
+  const payload = JSON.parse(req.body.sauce)
+  payload.imageUrl = makeImageUrl(req, req.file.fileName)
+  console.log("NOUVELLE IMAGE A GERER")
+  console.log("voici le payload:", payload)
+  return payload
+}
+
+function sendClientResponse(product, res) {
+  if (product == null) {
+    console.log("NOTHING TO UPDATE")
+    return res.status(404).send({ message: "Object not found in database" })
+  }
+  console.log("ALL GOOD, UPDATING:", product)
+  return Promise.resolve(res.status(200).send(product)).then(() => product)
 }
 
 function makeImageUrl(req, fileName) {
   return req.protocol + "://" + req.get("host") + "/images/" + fileName
 }
-
-function modifySauce(req, res) {
-  const {params: { id }} = req
-  
-  const hasNewImage = req.file !=null
-  const payload = makePayload(hasNewImage, req)
-  
-  Product.findByIdAndUpdate(id, payload)
-  .then((dbResponse) => sendClientResponse(dbResponse, res))
-  .then((product) => deleteImage(product))
-  .then((res)=> console.log("FILE DELETED", res))
-  .catch((err) => console.error("Probleme updating", err))
-}
-
-function makePayload(hasNewImage, req) {
-  console.log("hasNewImage:",hasNewImage )
-  if(!hasNewImage) return req.body
-  const payload = JSON.parse(req.body.sauce)
-  payload.imageUrl = makeImageUrl(req, req.file.fileName)
-  console.log("NOUVELLE IMAGE A GERER")
-  console.log("voici le payload:" , req.body.sauce)
-  return payload
-}
-
-function sendClientResponse (product , res) {
-    if(product == null ) {
-      console.log("NOTHING TO UPDATE")
-      return res.status(404).send({ message: "object not found in database"})
-    }
-    console.log("ALL GOOD, UPDATING:", product)
-    return Promise.resolve(res.status(200).send(product)).then(()=>product)
-
-}
-
 function createSauce(req, res) {
   const { body, file } = req
   const { fileName } = file
@@ -109,44 +108,52 @@ function createSauce(req, res) {
   product
     .save()
     .then((message) => res.status(201).send({ message }))
-    .catch((err) => res.status(500).send({ message: err}))
+    .catch((err) => res.status(500).send(err))
 }
 
-function likeSauce (req, res) {
+function likeSauce(req, res) {
   const { like, userId } = req.body
-  if(![0, -1, 1].includes(like)) return res.status(403).send({message: "invalid like value"})
-
+  if (![1, -1, 0].includes(like)) return res.status(403).send({ message: "Invalid like value" })
   getSauce(req, res)
-  .then((product) => updateVote(product, like, userId, res))
-  .then(prod => sendClientResponse(prod, res))
-  .catch((err) => res.status(500).send(err))
+    .then((product) => updateVote(product, like, userId, res))
+    .then((pr) => pr.save())
+    .then((prod) => sendClientResponse(prod, res))
+    .catch((err) => res.status(500).send(err))
 }
 
-function updateVote(product, like, userId, res){
-  if (like === 1 || like === -1) incrementVote(product, like, userId)
-  if (like === 0) resetVote(product, userId, res)
-  return product.save()
+function updateVote(product, like, userId, res) {
+  if (like === 1 || like === -1) return incrementVote(product, userId, like)
+  return resetVote(product, userId, res)
 }
 
 function resetVote(product, userId, res) {
   const { usersLiked, usersDisliked } = product
-  if([usersLiked, usersDisliked].every(arr => arr.includes(userId))) return res.status(500).send({message: "l'utilisateur a voter les 2 pouces" })
-  //if (![usersLiked, usersDisliked].some(arr => arr.includes(userId))) return res.status(500).send({message: "l'utilisateur n'a pas voter"})
+  if ([usersLiked, usersDisliked].every((arr) => arr.includes(userId)))
+    return Promise.reject("User seems to have voted both ways")
 
- 
+  if (![usersLiked, usersDisliked].some((arr) => arr.includes(userId)))
+    return Promise.reject("User seems to not have voted")
 
+  if (usersLiked.includes(userId)) {
+    --product.likes
+    product.usersLiked = product.usersLiked.filter((id) => id !== userId)
+  } else {
+    --product.dislikes
+    product.usersDisliked = product.usersDisliked.filter((id) => id !== userId)
+  }
+  return product
 }
 
-function incrementVote(product, userId , like) {
+function incrementVote(product, userId, like) {
   const { usersLiked, usersDisliked } = product
 
   const votersArray = like === 1 ? usersLiked : usersDisliked
-  if (votersArray.includes(userId)) return
+  if (votersArray.includes(userId)) return product
   votersArray.push(userId)
-  
-  let voteToUpdate = like === 1 ? product.likes : product.dislikes
-  voteToUpdate++
+
+  like === 1 ? ++product.likes : ++product.dislikes
+  return product
 }
 
 
-module.exports = {  getSauces, createSauce , getSauceById, deleteSauce, modifySauce, likeSauce}
+module.exports = { sendClientResponse, getSauces, createSauce, getSauceById, deleteSauce, modifySauce,likeSauce }
